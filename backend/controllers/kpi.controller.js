@@ -30,12 +30,23 @@ const getKPIData = (req, res) => {
     let filters = null;
 
     if (access.type === 'RESTRICTED') {
-        filters = rbacService.getRLSFilters(user, access.policy);
+        filters = rbacService.getRLSFilters(user, kpiId);
 
         if (filters) {
-            // Apply RLS
-            // Note: Data keys must match dimension names (lowercase)
-            data = data.filter(row => filters.values.includes(row[filters.dimension]));
+            // Apply RLS for each dimension found
+            // filters = { region: ['NA', 'EMEA'], product: ['A'] }
+
+            data = data.filter(row => {
+                // Row must match ALL dimension filters (AND logic between dimensions)
+                // But ANY value within a dimension (OR logic within dimension)
+                return Object.keys(filters).every(dimKey => {
+                    const rowValue = row[dimKey];
+                    const allowedValues = filters[dimKey];
+                    // If row doesn't have that dimension, we might skip or fail. 
+                    // Here we assume data matches schema.
+                    return allowedValues.includes(rowValue);
+                });
+            });
         } else {
             // Restricted but no scopes found -> Empty result
             data = [];

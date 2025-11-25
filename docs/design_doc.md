@@ -17,6 +17,14 @@ Row-level access is not static code; it is data-driven.
 - **Dimensions**: The criteria for filtering (e.g., `Region`, `BusinessUnit`, `ProductLine`).
 - **Scopes**: The specific values a user/group holds (e.g., `Region: [NA, EMEA]`).
 - **Assignment**: Scopes are assigned to **App Groups** or **Users**.
+- **Group Inheritance**: Users inherit all scopes assigned to the Groups they belong to.
+
+### 2.3 The "Owner" Role (SME)
+Beyond standard read access, we introduce the **Owner** concept:
+- **Definition**: A user with `access_type='OWNER'` for a specific KPI.
+- **Privileges**: 
+    1.  Implicit `FULL` read access.
+    2.  Delegated Administration rights (can assign scopes to others for that KPI).
 
 ### 2.3 Delegated Administration (The Approval Flow)
 To manage 16k users without a bottleneck:

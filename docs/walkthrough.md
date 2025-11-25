@@ -52,6 +52,19 @@ npm run dev
     - Click **Global Revenue**.
     - You now see data for **NA** AND **EMEA**.
 
+### Scenario D: Enterprise Workflow Verification (Script)
+To verify complex backend logic (JIT, Groups, SME) without clicking through the UI:
+1.  Open a terminal in `backend/`.
+2.  Run the verification script:
+    ```bash
+    node verify_enterprise_flow.js
+    ```
+3.  **Observe Output**:
+    - **JIT**: "Provisioning new user..."
+    - **Group Sync**: "Mapped Group... to Role..."
+    - **SME Action**: "SME sara_sme assigning..."
+    - **Access Check**: JSON output showing inherited scopes.
+
 ## Key Code Concepts
 
 - **`backend/services/rbac.service.js`**: Contains the logic for `canAccessKPI` and `getRLSFilters`.

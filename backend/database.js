@@ -90,7 +90,7 @@ const initSchema = () => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       role_id INTEGER,
       kpi_id INTEGER,
-      access_type TEXT CHECK(access_type IN ('FULL', 'RESTRICTED')), -- CHANGED: No more policy_id
+      access_type TEXT CHECK(access_type IN ('FULL', 'RESTRICTED', 'OWNER')), -- CHANGED: Added OWNER
       FOREIGN KEY(role_id) REFERENCES roles(id),
       FOREIGN KEY(kpi_id) REFERENCES kpis(id)
     );

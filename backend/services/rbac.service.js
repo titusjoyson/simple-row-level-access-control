@@ -94,28 +94,28 @@ const getKPIAccess = (user, kpiId) => {
       AND (s.valid_until IS NULL OR s.valid_until > datetime('now'))
     WHERE ur.user_id = ? AND p.kpi_id = ?
   `).all(user.id, kpiId);
-
     if (rows.length === 0) return null;
 
-    const hasFullAccess = rows.some(r => r.access_type === 'FULL');
+    // Check for OWNER or FULL access
+    const ownerPermission = rows.find(r => r.access_type === 'OWNER');
+    if (ownerPermission) return { type: 'OWNER', filters: null };
 
-    let result;
-    if (hasFullAccess) {
-        result = { type: 'FULL' };
-    } else {
-        const filters = {};
-        rows.forEach(row => {
-            if (row.dimension && row.scope_value) {
-                const dimKey = row.dimension.toLowerCase();
-                if (!filters[dimKey]) filters[dimKey] = [];
-                if (!filters[dimKey].includes(row.scope_value)) {
-                    filters[dimKey].push(row.scope_value);
-                }
+    const fullPermission = rows.find(r => r.access_type === 'FULL');
+    if (fullPermission) return { type: 'FULL', filters: null };
+
+    // Aggregate Filters for RESTRICTED access
+    const filters = {};
+    rows.forEach(row => {
+        if (row.dimension && row.scope_value) {
+            const dimKey = row.dimension.toLowerCase();
+            if (!filters[dimKey]) filters[dimKey] = [];
+            if (!filters[dimKey].includes(row.scope_value)) {
+                filters[dimKey].push(row.scope_value);
             }
-        });
-        result = { type: 'RESTRICTED', filters };
-    }
+        }
+    });
 
+    const result = { type: 'RESTRICTED', filters };
     permissionCache.set(cacheKey, { value: result, timestamp: Date.now() });
     return result;
 };

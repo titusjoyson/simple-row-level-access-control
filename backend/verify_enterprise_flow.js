@@ -33,17 +33,21 @@ db.prepare("INSERT INTO kpi_dimensions (kpi_id, dimension_id) VALUES (?, ?)").ru
 // App Roles
 const roleGlobalViewer = db.prepare("INSERT INTO roles (name) VALUES ('GLOBAL_VIEWER')").run().lastInsertRowid;
 const roleRegionalMgr = db.prepare("INSERT INTO roles (name) VALUES ('REGIONAL_MANAGER')").run().lastInsertRowid;
+const roleKpiOwner = db.prepare("INSERT INTO roles (name) VALUES ('KPI_OWNER')").run().lastInsertRowid; // SME Role
 
 // Permissions
 // Global Viewer -> Full Access
 db.prepare("INSERT INTO permissions (role_id, kpi_id, access_type) VALUES (?, ?, 'FULL')").run(roleGlobalViewer, kpiSales);
 // Regional Mgr -> Restricted Access
 db.prepare("INSERT INTO permissions (role_id, kpi_id, access_type) VALUES (?, ?, 'RESTRICTED')").run(roleRegionalMgr, kpiSales);
+// KPI Owner -> OWNER Access
+db.prepare("INSERT INTO permissions (role_id, kpi_id, access_type) VALUES (?, ?, 'OWNER')").run(roleKpiOwner, kpiSales);
 
 // AD Group Mapping (Config)
 const AD_GROUP_MAPPING = {
     'sg-finance-global': 'GLOBAL_VIEWER',
-    'sg-sales-managers': 'REGIONAL_MANAGER'
+    'sg-sales-managers': 'REGIONAL_MANAGER',
+    'sg-kpi-owners': 'KPI_OWNER'
 };
 
 // --- 3. Workflow Simulation Functions ---
@@ -77,8 +81,20 @@ const mockLogin = (username, email, adGroups) => {
     return user;
 };
 
-const smeAssignScope = (adminUser, targetUser, dimensionName, value) => {
-    console.log(`\n[SME Action] Admin ${adminUser.username} assigning ${dimensionName}=${value} to ${targetUser.username}`);
+const smeAssignScope = (smeUser, targetUser, dimensionName, value) => {
+    // 1. Authorization Check: Does this user have OWNER access to the relevant KPI?
+    const permissions = db.prepare(`
+    SELECT p.access_type FROM permissions p
+    JOIN user_roles ur ON ur.role_id = p.role_id
+    WHERE ur.user_id = ? AND p.access_type = 'OWNER'
+  `).all(smeUser.id);
+
+    if (permissions.length === 0) {
+        console.log(`\n[SME Action] ❌ DENIED: User ${smeUser.username} is not an OWNER.`);
+        return;
+    }
+
+    console.log(`\n[SME Action] ✅ APPROVED: SME ${smeUser.username} assigning ${dimensionName}=${value} to ${targetUser.username}`);
     const dim = db.prepare("SELECT id FROM dimensions WHERE name = ?").get(dimensionName);
     db.prepare(`
     INSERT INTO access_scopes (entity_type, entity_id, dimension_id, value) 
@@ -106,6 +122,7 @@ const checkAccess = (user, kpiId) => {
   `).all(user.id, kpiId);
 
     if (rows.length === 0) return 'NO ACCESS';
+    if (rows.some(r => r.access_type === 'OWNER')) return 'OWNER ACCESS'; // Explicit Owner Check
     if (rows.some(r => r.access_type === 'FULL')) return 'FULL ACCESS';
 
     // Aggregate Filters
@@ -130,9 +147,11 @@ const user1 = mockLogin('john_doe', 'john@corp.com', ['sg-sales-managers']);
 console.log('Access (Pre-Scope):', JSON.stringify(checkAccess(user1, kpiSales)));
 
 // SME assigns scopes
-const admin = { id: 999, username: 'SuperAdmin' };
-smeAssignScope(admin, user1, 'REGION', 'NA');
-smeAssignScope(admin, user1, 'SITE', 'NY-HQ');
+// 1. Login as SME
+const smeUser = mockLogin('sara_sme', 'sara@corp.com', ['sg-kpi-owners']);
+// 2. SME assigns scope
+smeAssignScope(smeUser, user1, 'REGION', 'NA');
+smeAssignScope(smeUser, user1, 'SITE', 'NY-HQ');
 
 console.log('Access (Post-Scope):', JSON.stringify(checkAccess(user1, kpiSales)));
 
@@ -150,7 +169,7 @@ newUsers.forEach(u => {
     if (u.groups.includes('sg-sales-managers')) {
         // Auto-assign default scope for sales managers? Or wait for SME?
         // Let's say we auto-assign 'Region: TBD'
-        smeAssignScope(admin, user, 'REGION', 'TBD');
+        smeAssignScope(smeUser, user, 'REGION', 'TBD');
     }
     console.log(`User ${u.name} Access:`, JSON.stringify(checkAccess(user, kpiSales)));
 });

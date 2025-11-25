@@ -1,8 +1,10 @@
 const db = require('../database');
 
-// Simple In-Memory Cache (In production, use Redis)
+// Simple In-Memory Cache
 const permissionCache = new Map();
-const CACHE_TTL_MS = 60 * 1000; // 1 minute
+const CACHE_TTL_MS = 60 * 1000;
+
+// --- Legacy Functions (Kept for backward compatibility) ---
 
 const canAccessKPI = (user, kpiId) => {
     const cacheKey = `perm:${user.id}:${kpiId}`;
@@ -12,7 +14,6 @@ const canAccessKPI = (user, kpiId) => {
         return cached.value;
     }
 
-    // 1. Get all permissions for user's roles for this KPI
     const permissions = db.prepare(`
     SELECT p.*
     FROM permissions p
@@ -23,12 +24,10 @@ const canAccessKPI = (user, kpiId) => {
     let result = null;
 
     if (permissions.length > 0) {
-        // 2. Check for ANY Full Access
         const fullAccess = permissions.find(p => p.access_type === 'FULL');
         if (fullAccess) {
             result = { type: 'FULL' };
         } else {
-            // 3. If no FULL access, but has permissions, it must be RESTRICTED
             result = { type: 'RESTRICTED' };
         }
     }
@@ -38,7 +37,6 @@ const canAccessKPI = (user, kpiId) => {
 };
 
 const getRLSFilters = (user, kpiId) => {
-    // 1. Get Dimensions configured for this KPI
     const dimensions = db.prepare(`
     SELECT d.id, d.name
     FROM kpi_dimensions kd
@@ -46,11 +44,10 @@ const getRLSFilters = (user, kpiId) => {
     WHERE kd.kpi_id = ?
   `).all(kpiId);
 
-    if (dimensions.length === 0) return null; // No dimensions configured = No filtering possible (or block all? usually block all if restricted but no dims)
+    if (dimensions.length === 0) return null;
 
     const filters = {};
 
-    // 2. For each dimension, fetch User's Scopes
     dimensions.forEach(dim => {
         const scopes = db.prepare(`
       SELECT s.value
@@ -67,7 +64,59 @@ const getRLSFilters = (user, kpiId) => {
     return filters;
 };
 
+// --- New Unified Function ---
+
+const getKPIAccess = (user, kpiId) => {
+    const cacheKey = `access:${user.id}:${kpiId}`;
+    const cached = permissionCache.get(cacheKey);
+
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+        return cached.value;
+    }
+
+    const rows = db.prepare(`
+    SELECT 
+      p.access_type,
+      d.name as dimension,
+      s.value as scope_value
+    FROM permissions p
+    JOIN user_roles ur ON p.role_id = ur.role_id
+    LEFT JOIN kpi_dimensions kd ON p.kpi_id = kd.kpi_id
+    LEFT JOIN dimensions d ON kd.dimension_id = d.id
+    LEFT JOIN access_scopes s ON s.dimension_id = d.id 
+      AND s.entity_type = 'USER' 
+      AND s.entity_id = ur.user_id
+      AND (s.valid_until IS NULL OR s.valid_until > datetime('now'))
+    WHERE ur.user_id = ? AND p.kpi_id = ?
+  `).all(user.id, kpiId);
+
+    if (rows.length === 0) return null;
+
+    const hasFullAccess = rows.some(r => r.access_type === 'FULL');
+
+    let result;
+    if (hasFullAccess) {
+        result = { type: 'FULL' };
+    } else {
+        const filters = {};
+        rows.forEach(row => {
+            if (row.dimension && row.scope_value) {
+                const dimKey = row.dimension.toLowerCase();
+                if (!filters[dimKey]) filters[dimKey] = [];
+                if (!filters[dimKey].includes(row.scope_value)) {
+                    filters[dimKey].push(row.scope_value);
+                }
+            }
+        });
+        result = { type: 'RESTRICTED', filters };
+    }
+
+    permissionCache.set(cacheKey, { value: result, timestamp: Date.now() });
+    return result;
+};
+
 module.exports = {
     canAccessKPI,
-    getRLSFilters
+    getRLSFilters,
+    getKPIAccess
 };

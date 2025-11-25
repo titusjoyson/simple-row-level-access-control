@@ -51,37 +51,24 @@ db.prepare('INSERT INTO roles (id, name) VALUES (?, ?)').run(rRestricted, 'ANALY
 db.prepare('INSERT INTO permissions (role_id, kpi_id, access_type) VALUES (?, ?, ?)').run(rFull, kpiId, 'FULL');
 db.prepare('INSERT INTO permissions (role_id, kpi_id, access_type) VALUES (?, ?, ?)').run(rRestricted, kpiId, 'RESTRICTED');
 
-// 3. Helper Functions (Mimicking Service Logic)
-const checkAccess = (userId) => {
-    // Get Roles
-    const roles = db.prepare('SELECT role_id FROM user_roles WHERE user_id = ?').all(userId).map(r => r.role_id);
-
-    // Get Permissions
-    const perms = db.prepare(`SELECT access_type FROM permissions WHERE kpi_id = ? AND role_id IN (${roles.join(',')})`).all(kpiId);
-
-    if (perms.some(p => p.access_type === 'FULL')) return { type: 'FULL' };
-    if (perms.length > 0) return { type: 'RESTRICTED' };
-    return null;
-};
-
-const getFilters = (userId) => {
-    const dims = db.prepare('SELECT dimension_id, name FROM dimensions d JOIN kpi_dimensions kd ON d.id = kd.dimension_id WHERE kd.kpi_id = ?').all(kpiId);
-    const filters = {};
-
-    dims.forEach(d => {
-        const scopes = db.prepare(`
-      SELECT value FROM access_scopes 
-      WHERE entity_id = ? AND dimension_id = ? 
-      AND (valid_until IS NULL OR valid_until > datetime('now'))
-    `).all(userId, d.dimension_id);
-        filters[d.name.toLowerCase()] = scopes.map(s => s.value);
-    });
-    return filters;
+// 3. Helper Functions (Mimicking Unified Service Logic)
+const filters = {};
+rows.forEach(row => {
+    if (row.dimension && row.scope_value) {
+        const dimKey = row.dimension.toLowerCase();
+        if (!filters[dimKey]) filters[dimKey] = [];
+        if (!filters[dimKey].includes(row.scope_value)) {
+            filters[dimKey].push(row.scope_value);
+        }
+    }
+});
+return { type: 'RESTRICTED', filters };
+    }
 };
 
 const runScenario = (name, userId, expectedCount) => {
     console.log(`\nRunning Scenario: ${name}`);
-    const access = checkAccess(userId);
+    const access = getKPIAccess(userId);
 
     if (!access) {
         console.log(`Result: Access Denied (Expected: ${expectedCount === 0 ? '0 rows' : 'Error'})`);
@@ -90,14 +77,18 @@ const runScenario = (name, userId, expectedCount) => {
 
     let resultData = JSON.parse(data);
     if (access.type === 'RESTRICTED') {
-        const filters = getFilters(userId);
+        const filters = access.filters;
         console.log('Applied Filters:', JSON.stringify(filters));
 
-        resultData = resultData.filter(row => {
-            return Object.keys(filters).every(dim => {
-                return filters[dim].includes(row[dim]);
+        if (Object.keys(filters).length > 0) {
+            resultData = resultData.filter(row => {
+                return Object.keys(filters).every(dim => {
+                    return filters[dim].includes(row[dim]);
+                });
             });
-        });
+        } else {
+            resultData = []; // Restricted but no filters = No Data
+        }
     } else {
         console.log('Access: FULL');
     }
@@ -112,35 +103,29 @@ const runScenario = (name, userId, expectedCount) => {
 // 4. Define Scenarios
 
 // Scenario A: The "Power User" (Full + Restricted)
-// User 1 has both ADMIN and ANALYST. Should see ALL 4 rows.
 db.prepare("INSERT INTO users (id, username) VALUES (1, 'PowerUser')").run();
 db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (1, 1)').run(); // Admin
 db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (1, 2)').run(); // Analyst
 runScenario('Power User (Full + Restricted)', 1, 4);
 
 // Scenario B: The "Expired Scope"
-// User 2 is ANALYST. Has 'NA' (Expired) and 'EU' (Valid). Should see EU rows only.
 db.prepare("INSERT INTO users (id, username) VALUES (2, 'ExpiredUser')").run();
 db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (2, 2)').run(); // Analyst
-// Scopes
-db.prepare("INSERT INTO access_scopes (entity_id, dimension_id, value, valid_until) VALUES (2, 1, 'NA', datetime('now', '-1 day'))").run(); // Expired
-db.prepare("INSERT INTO access_scopes (entity_id, dimension_id, value, valid_until) VALUES (2, 1, 'EU', NULL)").run(); // Valid
-// Need Product scope too (since KPI needs both)
-db.prepare("INSERT INTO access_scopes (entity_id, dimension_id, value) VALUES (2, 2, 'A')").run();
-db.prepare("INSERT INTO access_scopes (entity_id, dimension_id, value) VALUES (2, 2, 'B')").run();
-runScenario('Expired Scope (NA expired, EU valid)', 2, 2); // Should see EU-A, EU-B
+db.prepare("INSERT INTO access_scopes (entity_type, entity_id, dimension_id, value, valid_until) VALUES ('USER', 2, 1, 'NA', datetime('now', '-1 day'))").run(); // Expired
+db.prepare("INSERT INTO access_scopes (entity_type, entity_id, dimension_id, value, valid_until) VALUES ('USER', 2, 1, 'EU', NULL)").run(); // Valid
+db.prepare("INSERT INTO access_scopes (entity_type, entity_id, dimension_id, value) VALUES ('USER', 2, 2, 'A')").run();
+db.prepare("INSERT INTO access_scopes (entity_type, entity_id, dimension_id, value) VALUES ('USER', 2, 2, 'B')").run();
+runScenario('Expired Scope (NA expired, EU valid)', 2, 2);
 
 // Scenario C: The "Intersection" (Missing one dimension)
-// User 3 has Region 'NA' but NO Product scopes. Should see 0 rows.
 db.prepare("INSERT INTO users (id, username) VALUES (3, 'MissingDim')").run();
 db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (3, 2)').run();
-db.prepare("INSERT INTO access_scopes (entity_id, dimension_id, value) VALUES (3, 1, 'NA')").run();
+db.prepare("INSERT INTO access_scopes (entity_type, entity_id, dimension_id, value) VALUES ('USER', 3, 1, 'NA')").run();
 runScenario('Missing Dimension (Has Region, No Product)', 3, 0);
 
 // Scenario D: The "Specific Intersection"
-// User 4 has Region 'NA' and Product 'A'. Should see 1 row (NA-A).
 db.prepare("INSERT INTO users (id, username) VALUES (4, 'Specific')").run();
 db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (4, 2)').run();
-db.prepare("INSERT INTO access_scopes (entity_id, dimension_id, value) VALUES (4, 1, 'NA')").run();
-db.prepare("INSERT INTO access_scopes (entity_id, dimension_id, value) VALUES (4, 2, 'A')").run();
+db.prepare("INSERT INTO access_scopes (entity_type, entity_id, dimension_id, value) VALUES ('USER', 4, 1, 'NA')").run();
+db.prepare("INSERT INTO access_scopes (entity_type, entity_id, dimension_id, value) VALUES ('USER', 4, 2, 'A')").run();
 runScenario('Specific Intersection (NA + A)', 4, 1);

@@ -46,6 +46,21 @@ const initSchema = () => {
       FOREIGN KEY(role_id) REFERENCES roles(id)
     );
 
+    -- Groups (For grouping users and assigning scopes)
+    CREATE TABLE groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      description TEXT
+    );
+
+    CREATE TABLE user_groups (
+      user_id INTEGER,
+      group_id INTEGER,
+      PRIMARY KEY (user_id, group_id),
+      FOREIGN KEY(user_id) REFERENCES users(id),
+      FOREIGN KEY(group_id) REFERENCES groups(id)
+    );
+
     -- Resources & Metadata
     CREATE TABLE kpis (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

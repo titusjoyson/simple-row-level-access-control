@@ -84,8 +84,13 @@ const getKPIAccess = (user, kpiId) => {
     LEFT JOIN kpi_dimensions kd ON p.kpi_id = kd.kpi_id
     LEFT JOIN dimensions d ON kd.dimension_id = d.id
     LEFT JOIN access_scopes s ON s.dimension_id = d.id 
-      AND s.entity_type = 'USER' 
-      AND s.entity_id = ur.user_id
+      AND (
+        (s.entity_type = 'USER' AND s.entity_id = ur.user_id)
+        OR 
+        (s.entity_type = 'GROUP' AND s.entity_id IN (
+           SELECT group_id FROM user_groups WHERE user_id = ur.user_id
+        ))
+      )
       AND (s.valid_until IS NULL OR s.valid_until > datetime('now'))
     WHERE ur.user_id = ? AND p.kpi_id = ?
   `).all(user.id, kpiId);

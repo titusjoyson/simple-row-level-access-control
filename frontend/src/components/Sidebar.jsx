@@ -1,9 +1,20 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
-import { LayoutDashboard, ShieldCheck, User } from 'lucide-react';
+import { useLocation, Link } from 'react-router-dom';
+import { LayoutDashboard, ShieldCheck, User, Settings, Users } from 'lucide-react';
 
-const Sidebar = ({ activePage, setActivePage }) => {
+const Sidebar = () => {
     const { currentUser, users, login } = useAuth();
+    const location = useLocation();
+
+    // Helper for active class
+    const getLinkClass = (path) => {
+        const isActive = location.pathname.startsWith(path);
+        // Special case for admin to not highlight on groups sub-route if strict matching desired, 
+        // but simple startsWith works for now if we organize paths correctly.
+        return `w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${isActive ? 'bg-accent text-white' : 'hover:bg-secondary text-slate-300'
+            }`;
+    };
 
     return (
         <div className="w-64 bg-primary text-white h-screen flex flex-col p-4">
@@ -13,22 +24,25 @@ const Sidebar = ({ activePage, setActivePage }) => {
             </div>
 
             <nav className="flex-1 space-y-2">
-                <button
-                    onClick={() => setActivePage('dashboard')}
-                    className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${activePage === 'dashboard' ? 'bg-accent text-white' : 'hover:bg-secondary text-slate-300'
-                        }`}
-                >
+                <Link to="/dashboard" className={getLinkClass('/dashboard')}>
                     <LayoutDashboard size={20} />
                     <span>Dashboard</span>
-                </button>
-                <button
-                    onClick={() => setActivePage('access')}
-                    className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${activePage === 'access' ? 'bg-accent text-white' : 'hover:bg-secondary text-slate-300'
-                        }`}
-                >
+                </Link>
+
+                <Link to="/access" className={getLinkClass('/access')}>
                     <ShieldCheck size={20} />
-                    <span>Access Management</span>
-                </button>
+                    <span>Access Requests</span>
+                </Link>
+
+                <Link to="/admin" className={getLinkClass('/admin')}>
+                    <Settings size={20} />
+                    <span>Admin Controls</span>
+                </Link>
+
+                <Link to="/admin/groups" className={getLinkClass('/admin/groups')}>
+                    <Users size={20} />
+                    <span>Groups</span>
+                </Link>
             </nav>
 
             <div className="mt-auto border-t border-secondary pt-4">

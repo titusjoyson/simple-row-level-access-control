@@ -12,9 +12,14 @@ const initSchema = () => {
     DROP TABLE IF EXISTS access_requests;
     DROP TABLE IF EXISTS access_scopes;
     DROP TABLE IF EXISTS permissions;
-    DROP TABLE IF EXISTS kpi_dimensions; -- NEW
+    DROP TABLE IF EXISTS kpi_dimensions;
+    DROP TABLE IF EXISTS user_groups;
+    DROP TABLE IF EXISTS groups;
     DROP TABLE IF EXISTS user_roles;
-    DROP TABLE IF EXISTS policies; -- REMOVED
+    DROP TABLE IF EXISTS user_capabilities;
+    DROP TABLE IF EXISTS role_capabilities;
+    DROP TABLE IF EXISTS capabilities;     
+    DROP TABLE IF EXISTS policies;
     DROP TABLE IF EXISTS dimensions;
     DROP TABLE IF EXISTS kpis;
     DROP TABLE IF EXISTS roles;
@@ -34,7 +39,7 @@ const initSchema = () => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT UNIQUE NOT NULL,
       description TEXT,
-      parent_role_id INTEGER, -- For hierarchy (e.g., Senior Manager > Manager)
+      parent_role_id INTEGER, 
       FOREIGN KEY(parent_role_id) REFERENCES roles(id)
     );
 
@@ -46,7 +51,31 @@ const initSchema = () => {
       FOREIGN KEY(role_id) REFERENCES roles(id)
     );
 
-    -- Groups (For grouping users and assigning scopes)
+    -- Functional Access (PBAC) -- NEW
+    CREATE TABLE capabilities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,   -- e.g., 'view:revenue_dashboard'
+      description TEXT
+    );
+
+    CREATE TABLE role_capabilities (
+      role_id INTEGER,
+      capability_id INTEGER,
+      PRIMARY KEY (role_id, capability_id),
+      FOREIGN KEY(role_id) REFERENCES roles(id),
+      FOREIGN KEY(capability_id) REFERENCES capabilities(id)
+    );
+
+    CREATE TABLE user_capabilities (
+      user_id INTEGER,
+      capability_id INTEGER,
+      action TEXT CHECK(action IN ('GRANT', 'REVOKE')), -- Explicit override
+      PRIMARY KEY (user_id, capability_id),
+      FOREIGN KEY(user_id) REFERENCES users(id),
+      FOREIGN KEY(capability_id) REFERENCES capabilities(id)
+    );
+
+    -- Grouping
     CREATE TABLE groups (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT UNIQUE NOT NULL,
@@ -76,7 +105,7 @@ const initSchema = () => {
       description TEXT
     );
 
-    -- KPI Configuration (Which dimensions apply to which KPI)
+    -- KPI Configuration
     CREATE TABLE kpi_dimensions (
       kpi_id INTEGER,
       dimension_id INTEGER,
@@ -90,7 +119,7 @@ const initSchema = () => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       role_id INTEGER,
       kpi_id INTEGER,
-      access_type TEXT CHECK(access_type IN ('FULL', 'RESTRICTED', 'OWNER')), -- CHANGED: Added OWNER
+      access_type TEXT CHECK(access_type IN ('FULL', 'RESTRICTED', 'OWNER')),
       FOREIGN KEY(role_id) REFERENCES roles(id),
       FOREIGN KEY(kpi_id) REFERENCES kpis(id)
     );
@@ -100,9 +129,9 @@ const initSchema = () => {
       entity_type TEXT CHECK(entity_type IN ('USER', 'GROUP')),
       entity_id INTEGER,
       dimension_id INTEGER,
-      value TEXT NOT NULL, -- e.g., 'APAC'
+      value TEXT NOT NULL, 
       valid_from DATETIME DEFAULT CURRENT_TIMESTAMP,
-      valid_until DATETIME, -- Nullable for permanent
+      valid_until DATETIME, 
       FOREIGN KEY(dimension_id) REFERENCES dimensions(id)
     );
 
@@ -121,11 +150,24 @@ const initSchema = () => {
     CREATE TABLE audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
-      action TEXT NOT NULL, -- e.g., 'LOGIN', 'VIEW_KPI', 'APPROVE_ACCESS'
-      target TEXT, -- e.g., 'kpi:revenue'
-      details TEXT, -- JSON
+      action TEXT NOT NULL,
+      target TEXT, 
+      details TEXT, 
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- PERFOMANCE INDEXES
+    -- 1. Critical for ContextBuilder (Scope Lookup)
+    -- Without this, finding a user's scopes is a full table scan.
+    CREATE INDEX idx_access_scopes_entity ON access_scopes(entity_type, entity_id);
+    
+    -- 2. Critical for ContextBuilder (Permission Lookup)
+    -- Foreign keys are not indexed by default in SQLite.
+    CREATE INDEX idx_permissions_role ON permissions(role_id);
+    CREATE INDEX idx_permissions_kpi ON permissions(kpi_id); 
+
+    -- 3. Optimization for Hierarchies
+    CREATE INDEX idx_roles_parent ON roles(parent_role_id);
   `);
 };
 
@@ -134,7 +176,7 @@ const seedData = () => {
   const userCount = db.prepare('SELECT count(*) as count FROM users').get();
   if (userCount.count > 0) return;
 
-  console.log('Seeding Enterprise Data (Refactored)...');
+  console.log('Seeding Enterprise Data (Refactored with Indexes)...');
 
   // 1. Dimensions
   const insertDim = db.prepare('INSERT INTO dimensions (name, description) VALUES (?, ?)');
@@ -161,7 +203,31 @@ const seedData = () => {
   assignRole.run(uCharlie, roleAnalyst);
   assignRole.run(uDave, roleExec);
 
-  // 5. KPIs
+  // 5. Capabilities -- NEW
+  const insertCap = db.prepare('INSERT INTO capabilities (slug, description) VALUES (?, ?)');
+  const capViewRev = insertCap.run('view:revenue_dashboard', 'View Revenue Dashboard').lastInsertRowid;
+  const capViewChurn = insertCap.run('view:churn_dashboard', 'View Churn Dashboard').lastInsertRowid;
+  const capExport = insertCap.run('click:export_btn', 'Export Data Button').lastInsertRowid;
+  const capAdmin = insertCap.run('view:admin_settings', 'Admin Settings').lastInsertRowid;
+
+  // 6. Role Capabilities -- NEW
+  const assignRoleCap = db.prepare('INSERT INTO role_capabilities (role_id, capability_id) VALUES (?, ?)');
+
+  // Admin: Everything
+  assignRoleCap.run(roleAdmin, capViewRev);
+  assignRoleCap.run(roleAdmin, capViewChurn);
+  assignRoleCap.run(roleAdmin, capExport);
+  assignRoleCap.run(roleAdmin, capAdmin);
+
+  // Manager: Everything except Admin
+  assignRoleCap.run(roleMgr, capViewRev);
+  assignRoleCap.run(roleMgr, capViewChurn);
+  assignRoleCap.run(roleMgr, capExport);
+
+  // Analyst: Only Revenue
+  assignRoleCap.run(roleAnalyst, capViewRev);
+
+  // 7. KPIs
   const insertKPI = db.prepare('INSERT INTO kpis (name, description, resource_key, base_data) VALUES (?, ?, ?, ?)');
   const revenueData = JSON.stringify([
     { region: 'NA', amount: 1000 },
@@ -177,13 +243,13 @@ const seedData = () => {
   ]);
   const kpiChurn = insertKPI.run('Churn Rate', 'Customer churn', 'kpi:churn', churnData).lastInsertRowid;
 
-  // 6. KPI Dimensions (Configuration)
+  // 8. KPI Dimensions (Configuration)
   const configKpiDim = db.prepare('INSERT INTO kpi_dimensions (kpi_id, dimension_id) VALUES (?, ?)');
   // Both KPIs support Region filtering
   configKpiDim.run(kpiRev, dimRegion);
   configKpiDim.run(kpiChurn, dimRegion);
 
-  // 7. Permissions
+  // 9. Permissions
   const grant = db.prepare('INSERT INTO permissions (role_id, kpi_id, access_type) VALUES (?, ?, ?)');
   // Admin & Exec: Full Access
   grant.run(roleAdmin, kpiRev, 'FULL');
@@ -198,7 +264,7 @@ const seedData = () => {
   // Analyst: Revenue (Restricted)
   grant.run(roleAnalyst, kpiRev, 'RESTRICTED');
 
-  // 8. Access Scopes
+  // 10. Access Scopes
   const addScope = db.prepare('INSERT INTO access_scopes (entity_type, entity_id, dimension_id, value) VALUES (?, ?, ?, ?)');
   // Bob (Manager) -> EMEA
   addScope.run('USER', uBob, dimRegion, 'EMEA');

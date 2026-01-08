@@ -26,7 +26,13 @@ Beyond standard read access, we introduce the **Owner** concept:
     1.  Implicit `FULL` read access.
     2.  Delegated Administration rights (can assign scopes to others for that KPI).
 
-### 2.3 Delegated Administration (The Approval Flow)
+### 2.4 Component-Level Access (PBAC)
+To manage granular UI access (Screens, Tabs, Buttons), we introduce **Permission-Based Access Control (PBAC)**:
+- **Capabilities**: Discrete flags (e.g., `view:revenue_dashboard`) that control UI visibility.
+- **User Overrides**: The ability to explicity **Grant** or **Revoke** a capability for a specific user, overriding their Role.
+- **Separation**: Capabilities control *Visibility* (Hide/Show), while Permissions control *Data Access* (Disable/Enable and Filtering).
+
+### 2.5 Delegated Administration (The Approval Flow)
 To manage 16k users without a bottleneck:
 - **Elevated Roles**: Specific roles (e.g., `Data Steward`, `Unit Lead`) have the permission to `APPROVE_ACCESS` for specific Dimensions.
 - **Workflow**: Users request access to a Scope (e.g., "I need APAC data"). The system routes this to the nearest Approver for that Dimension.
@@ -59,36 +65,18 @@ To manage 16k users without a bottleneck:
     - `Status`: Pending/Approved/Rejected
     - `ApproverRole`: The role required to approve this (dynamic routing).
 
-## 4. Enterprise Integration Strategy (Future State)
-The current prototype simulates functions that will eventually be offloaded to enterprise platforms:
-
-### 4.1 Identity & Roles (Azure AD / Entra ID)
-- **Source of Truth**: Azure AD will manage Users and Roles (via App Roles or Groups).
-- **Integration**:
-    - The application will accept **JWT Tokens** from Azure AD.
-    - `auth.middleware.js` will validate the JWT and extract `oid` (User ID) and `roles` claims.
-    - The local `users` and `roles` tables will act as a **cache** or be removed in favor of stateless token inspection.
-
-### 4.2 Governance & Workflow (ServiceNow / SailPoint)
-- **Request Portal**: Users will request access to specific Data Scopes (e.g., "Region: APAC") via **ServiceNow** Service Catalog.
-- **Approval Workflow**: Approvals happen in ServiceNow/SailPoint.
-- **Provisioning**:
-    - Upon approval, **SailPoint** will call this application's API (e.g., `POST /api/system/provision-scope`).
-    - This API will write to the `access_scopes` table.
-    - The built-in `access_requests` table and UI will be deprecated in production.
-
-## 5. Workflows
+## 4. Workflows
 
 ### 4.1 Access Evaluation Logic
-When a user queries a KPI (e.g., `Revenue`):
-1. **Check Role**: Does User have a Role that maps to `Revenue`?
-   - No -> Deny.
-   - Yes -> Get `PolicyID`.
-2. **Apply Policy**:
-   - If `PolicyID` is NULL -> Return all data.
-   - If `PolicyID` is "By Region" ->
-     - Fetch User's `AccessScopes` for "Region" (including Group inheritance).
-     - Apply Filter: `WHERE region IN (user_scopes)`.
+1. **Capability Check (PBAC)**: Does user have `view:revenue_dashboard`?
+    - If user is explicitly revoked -> DENY.
+    - If user has capability (Role or Direct) -> ALLOW.
+2. **Permission Check (RBAC)**: Does Role map to `Revenue`?
+    - No -> Data is inaccessible (Disable UI).
+    - Yes -> Check Access Type.
+3. **Scope Resolution (RLS)**:
+    - If `FULL` -> Return all data.
+    - If `RESTRICTED` -> Apply `WHERE region IN (user_scopes)`.
 
 ### 4.2 Approval Workflow
 1. **Request**: User requests access to "Region: EMEA".
@@ -102,7 +90,7 @@ When a user queries a KPI (e.g., `Revenue`):
 - **Backend**: Node.js (NestJS or Express) or Python (FastAPI).
 - **Database**: PostgreSQL.
     - Use **Postgres RLS** features for maximum security and performance, OR
-    - Use **Application-level Query Injection** (Knex/TypeORM) for flexibility if the underlying data sources are diverse (e.g., API-based KPIs).
+    - Use **Application-level Query Injection** (Knex/TypeORM) for flexibility.
     - *Recommendation for POC*: Application-level logic to demonstrate the complexity clearly.
 
 ## 6. Scalability & Security Considerations
